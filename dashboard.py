@@ -6,12 +6,25 @@ import os
 # --- Page Configuration ---
 st.set_page_config(page_title="Live NFL Odds Comparator", layout="wide")
 st.title("🏈 Live NFL Odds Comparator")
-st.write("Compare live odds and find Positive Expected Value (+EV) bets.")
+st.write("Compare live odds and find Positive Expected Value (+EV) bets from a curated list of sportsbooks.")
 
-# --- API Configuration & Helper Functions ---
+# --- WHITELIST & API CONFIGURATION ---
+# Define the specific list of sportsbooks we want to display.
+ALLOWED_BOOKS = {
+    'FanDuel',
+    'DraftKings',
+    'Underdog Fantasy',
+    'Fliff',
+    'Caesars',
+    'BetMGM',
+    'ESPN BET',
+    'Fanatics Sportsbook',
+    'Pinnacle'  # Include our sharp book for EV calculations
+}
+SHARP_BOOK_PRIORITY = ['Pinnacle', 'Circa Sports', 'BookMaker'] # Keep this for finding the baseline
 API_KEY = st.secrets.get("ODDS_API_KEY", os.environ.get('ODDS_API_KEY'))
-SHARP_BOOK_PRIORITY = ['Pinnacle', 'Circa Sports', 'BookMaker'] # Use a priority list
 
+# (Helper functions are unchanged)
 def highlight_favorable_odds(row):
     numeric_row = pd.to_numeric(row, errors='coerce').dropna()
     if not numeric_row.empty:
@@ -54,12 +67,17 @@ data, error = get_h2h_data()
 
 # --- Diagnostic Tool ---
 st.markdown("---")
-with st.expander("See all available sportsbooks in the current data feed"):
+with st.expander("See sportsbook data diagnostics"):
     if data:
-        all_bookmakers = sorted(list({book['title'] for game in data for book in game['bookmakers']}))
-        st.write(all_bookmakers)
-    else:
-        st.write("No data fetched yet.")
+        all_bookmakers_from_api = sorted(list({book['title'] for game in data for book in game['bookmakers']}))
+        st.write("**All Sportsbooks Received from API:**")
+        st.write(all_bookmakers_from_api)
+        st.write("**Your Curated List (Whitelist):**")
+        st.write(sorted(list(ALLOWED_BOOKS)))
+        
+        used_books = [b for b in all_bookmakers_from_api if b in ALLOWED_BOOKS]
+        st.write("**Sportsbooks Being Used in Dashboard:**")
+        st.write(used_books)
 
 # --- UI TABS ---
 tab1, tab2 = st.tabs(["Odds Comparator", "EV Finder"])
@@ -70,11 +88,11 @@ with tab1:
     elif data:
         long_format = []
         for game in data:
-            home_team = game['home_team']
-            away_team = game['away_team']
-            for book in game['bookmakers']:
+            home_team, away_team = game['home_team'], game['away_team']
+            # Apply the filter here
+            filtered_bookmakers = [b for b in game['bookmakers'] if b['title'] in ALLOWED_BOOKS]
+            for book in filtered_bookmakers:
                 for outcome in book['markets'][0]['outcomes']:
-                    # Standardize team name
                     team = home_team if home_team in outcome['name'] else away_team
                     long_format.append({'game': f"{away_team} @ {home_team}", 'team': team, 'bookmaker': book['title'], 'odds': outcome['price']})
         
@@ -93,15 +111,15 @@ with tab2:
         ev_bets_found = False
         for game in data:
             game_name = f"{game['away_team']} @ {game['home_team']}"
-            home_team = game['home_team']
-            away_team = game['away_team']
+            home_team, away_team = game['home_team'], game['away_team']
+            
+            filtered_bookmakers = [b for b in game['bookmakers'] if b['title'] in ALLOWED_BOOKS]
             
             baseline_book_name, sharp_odds_raw = None, None
             for book_name in SHARP_BOOK_PRIORITY:
-                found_book = [b for b in game['bookmakers'] if b['title'] == book_name]
+                found_book = [b for b in filtered_bookmakers if b['title'] == book_name]
                 if found_book:
-                    baseline_book_name = book_name
-                    sharp_odds_raw = found_book[0]
+                    baseline_book_name, sharp_odds_raw = book_name, found_book[0]
                     break
             
             if not baseline_book_name: continue
@@ -115,8 +133,8 @@ with tab2:
             true_away_prob, true_home_prob = calculate_no_vig_prob(sharp_away_odds, sharp_home_odds)
 
             display_data = {}
-            for book in game['bookmakers']:
-                if book['title'] in SHARP_BOOK_PRIORITY: continue
+            for book in filtered_bookmakers:
+                if book['title'] == baseline_book_name: continue
                 
                 book_outcomes = book['markets'][0]['outcomes']
                 book_away_odds = next((o['price'] for o in book_outcomes if away_team in o['name']), None)
@@ -143,4 +161,5 @@ with tab2:
                 st.dataframe(ev_df.fillna('-'), use_container_width=True)
         
         if not ev_bets_found:
-            st.warning("No Positive EV bets found in the current data. Markets may be efficient or no sharp bookmaker was found for comparison.")
+            st.warning("No Positive EV bets found in the current data from your curated list of sportsbooks.")
+
