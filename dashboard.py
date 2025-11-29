@@ -147,4 +147,13 @@ with tab2:
                 if book_home_odds and calculate_ev(true_home_prob, book_home_odds) > 0:
                     ev = calculate_ev(true_home_prob, book_home_odds)
                     ev_bets_found, display_data[home_team] = True, display_data.get(home_team, {})
-                    display_data[home_team][book['title']] = f"{book_home_o
+                    display_data[home_team][book['title']] = f"{book_home_odds:+.0f} ({ev:.2%})"
+
+            if display_data:
+                st.subheader(game_name)
+                st.write(f"Comparing against **{baseline_book_name}**'s no-vig line: **{away_team} ({true_away_prob:.2%})** vs **{home_team} ({true_home_prob:.2%})**")
+                ev_df = pd.DataFrame.from_dict(display_data, orient='index')
+                st.dataframe(ev_df.fillna('-'), use_container_width=True)
+        
+        if not ev_bets_found:
+            st.warning("No Positive EV bets found in the current data. Markets may be efficient or your whitelist is missing a sharp bookmaker.")
