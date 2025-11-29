@@ -19,7 +19,7 @@ ALLOWED_BOOKS_LOWER = set(LOWER_TO_PROPER_CASE_MAP.keys())
 
 SHARP_BOOK_PRIORITY = ['Pinnacle', 'Circa Sports', 'BookMaker']
 API_KEY = st.secrets.get("ODDS_API_KEY", os.environ.get('ODDS_API_KEY'))
-USER_TIMEZONE = "America/New_York" # Timezone for display
+USER_TIMEZONE = "America/New_York"
 
 # (Helper functions are unchanged)
 def highlight_favorable_odds(row):
@@ -59,7 +59,6 @@ def get_h2h_data():
     raw_data = response.json()
     standardized_data = []
     for game in raw_data:
-        # NEW: Parse the UTC time string into a real datetime object
         game['commence_time_dt'] = datetime.fromisoformat(game['commence_time'].replace('Z', '+00:00'))
         
         standardized_bookmakers = []
@@ -75,17 +74,13 @@ def get_h2h_data():
             game_copy['bookmakers'] = standardized_bookmakers
             standardized_data.append(game_copy)
             
-    # NEW: Sort the entire list of games by the datetime object
     standardized_data.sort(key=lambda x: x['commence_time_dt'])
-            
     return standardized_data, None
 
 # --- Main App Logic ---
 if st.button("Refresh Data"): st.cache_data.clear()
 
 data, error = get_h2h_data()
-
-# (Diagnostic Tool can be removed or left as is)
 
 # --- UI TABS ---
 tab1, tab2 = st.tabs(["Odds Comparator", "EV Finder"])
@@ -94,29 +89,20 @@ with tab1:
     st.header("Head-to-Head Moneyline Odds")
     if error: st.error(error)
     elif data:
-        # The data is now pre-sorted, so we just need to build the display data
         long_format = []
         for game in data:
             home_team, away_team = game['home_team'], game['away_team']
             for book in game['bookmakers']:
                 for outcome in book['markets'][0]['outcomes']:
                     team = home_team if home_team in outcome['name'] else away_team
-                    long_format.append({
-                        'game_id': f"{away_team} @ {home_team}",
-                        'game_time': game['commence_time_dt'],
-                        'team': team,
-                        'bookmaker': book['title'],
-                        'odds': outcome['price']
-                    })
+                    long_format.append({'game_id': f"{away_team} @ {home_team}", 'team': team, 'bookmaker': book['title'], 'odds': outcome['price']})
         
         if long_format:
             df = pd.DataFrame(long_format)
-            # Use the sorted game IDs from the original data to ensure order
             unique_games_ordered = [f"{g['away_team']} @ {g['home_team']}" for g in data]
             game_times = {f"{g['away_team']} @ {g['home_team']}": g['commence_time_dt'] for g in data}
 
             for game_name in unique_games_ordered:
-                # NEW: Format the time for display in the user's timezone
                 game_time_local = game_times[game_name].astimezone(pd.Timestamp(datetime.now(), tz=USER_TIMEZONE).tz)
                 formatted_time = game_time_local.strftime('%a, %b %d - %I:%M %p %Z')
                 st.subheader(f"{game_name} ({formatted_time})")
@@ -127,12 +113,10 @@ with tab1:
 
 with tab2:
     st.header(f"Positive Expected Value (+EV) Bets")
-    # This tab will now also be in chronological order because 'data' is pre-sorted
     if error: st.error(error)
     elif data:
         ev_bets_found = False
-        for game in data: # Loop through the pre-sorted data
-            # (EV logic is unchanged, but benefits from the sorted data)
+        for game in data:
             game_name, home_team, away_team = f"{game['away_team']} @ {game['home_team']}", game['home_team'], game['away_team']
             game_time_local = game['commence_time_dt'].astimezone(pd.Timestamp(datetime.now(), tz=USER_TIMEZONE).tz)
             formatted_time = game_time_local.strftime('%a, %b %d - %I:%M %p %Z')
@@ -154,15 +138,35 @@ with tab2:
             
             true_away_prob, true_home_prob = calculate_no_vig_prob(sharp_away_odds, sharp_home_odds)
 
-            display__data = {}
-            # ... (rest of EV logic) ...
+            # *** FIX IS HERE ***
+            display_data = {} # Corrected variable name from display__data to display_data
+
+            for book in game['bookmakers']:
+                if book['title'] in SHARP_BOOK_PRIORITY: continue
+                
+                book_outcomes = book['markets'][0]['outcomes']
+                book_away_odds = next((o['price'] for o in book_outcomes if away_team in o['name']), None)
+                book_home_odds = next((o['price'] for o in book_outcomes if home_team in o['name']), None)
+
+                if book_away_odds:
+                    ev = calculate_ev(true_away_prob, book_away_odds)
+                    if ev > 0:
+                        ev_bets_found = True
+                        if away_team not in display_data: display_data[away_team] = {}
+                        display_data[away_team][book['title']] = f"{book_away_odds:+.0f} ({ev:.2%})"
+                
+                if book_home_odds:
+                    ev = calculate_ev(true_home_prob, book_home_odds)
+                    if ev > 0:
+                        ev_bets_found = True
+                        if home_team not in display_data: display_data[home_team] = {}
+                        display_data[home_team][book['title']] = f"{book_home_odds:+.0f} ({ev:.2%})"
 
             if display_data:
-                st.subheader(f"{game_name} ({formatted_time})") # Add time to header
-                st.write(f"Comparing against **{baseline_book_name}**'s no-vig line...")
+                st.subheader(f"{game_name} ({formatted_time})")
+                st.write(f"Comparing against **{baseline_book_name}**'s no-vig line: **{away_team} ({true_away_prob:.2%})** vs **{home_team} ({true_home_prob:.2%})**")
                 ev_df = pd.DataFrame.from_dict(display_data, orient='index')
                 st.dataframe(ev_df.fillna('-'), use_container_width=True)
-                ev_bets_found = True
 
         if not ev_bets_found:
             st.warning("No Positive EV bets found in the current data.")
