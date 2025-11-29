@@ -169,3 +169,4 @@ with tab2:
 
         if not ev_bets_found:
             st.warning("No Positive EV bets found in the current data.")
+
